@@ -315,6 +315,10 @@ class Transaction {
     return coordinator_state_ & COORD_OOO;
   }
 
+  unsigned GetCoordinatorState() const {
+    return coordinator_state_;
+  }
+
   // If blocking tx was woken up on this shard, get wake key.
   std::optional<std::string_view> GetWakeKey(ShardId sid) const;
 
@@ -352,6 +356,14 @@ class Transaction {
   void Refurbish();
 
   void IterateMultiLocks(ShardId sid, std::function<void(const std::string&)> cb) const;
+
+  unsigned GetRunCount() const {
+    return run_count_.load(std::memory_order_relaxed);
+  }
+
+  uint32_t GetUseCount() const {
+    return use_count_.load(std::memory_order_relaxed);
+  }
 
  private:
   // Holds number of locks for each IntentLock::Mode: shared and exlusive.
@@ -524,10 +536,6 @@ class Transaction {
 
   // Returns the previous value of run count.
   void DecreaseRunCnt();
-
-  uint32_t GetUseCount() const {
-    return use_count_.load(std::memory_order_relaxed);
-  }
 
   // Whether the transaction is multi and runs in an atomic mode.
   // This, instead of just IsMulti(), should be used to check for the possibility of

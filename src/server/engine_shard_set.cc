@@ -18,6 +18,7 @@ extern "C" {
 #include "base/logging.h"
 #include "io/proc_reader.h"
 #include "server/blocking_controller.h"
+#include "server/command_registry.h"
 #include "server/search/doc_index.h"
 #include "server/server_state.h"
 #include "server/tiered_storage.h"
@@ -461,6 +462,9 @@ void EngineShard::PollExecution(const char* context, Transaction* trans) {
     CHECK(continuation_trans_ == nullptr)
         << continuation_trans_->DebugId() << " when polling " << trans->DebugId()
         << "cont_mask: " << continuation_trans_->GetLocalMask(sid) << " vs " << trans_mask;
+    CHECK_GT(trans->GetRunCount(), 0u)
+        << trans->GetUniqueShardCnt() << " " << trans->GetCId()->name() << " "
+        << trans->GetUseCount() << " " << trans->GetCoordinatorState();
 
     bool keep = trans->RunInShard(this, false);
     if (keep) {
@@ -478,6 +482,7 @@ void EngineShard::PollExecution(const char* context, Transaction* trans) {
       if (VLOG_IS_ON(1)) {
         dbg_id = continuation_trans_->DebugId();
       }
+      CHECK_GT(continuation_trans_->GetRunCount(), 0u);
       bool to_keep = continuation_trans_->RunInShard(this, false);
       DVLOG(1) << "RunContTrans: " << dbg_id << " keep: " << to_keep;
       if (!to_keep) {
@@ -559,6 +564,10 @@ void EngineShard::PollExecution(const char* context, Transaction* trans) {
     }
 
     bool txq_ooo = trans_mask & Transaction::OUT_OF_ORDER;
+    CHECK_GT(trans->GetRunCount(), 0u)
+        << trans->GetUniqueShardCnt() << " " << trans->GetCId()->name() << " "
+        << trans->GetUseCount() << " " << trans->GetCoordinatorState();
+
     bool keep = trans->RunInShard(this, txq_ooo);
 
     // If the transaction concluded, it must remove itself from the tx queue.
