@@ -482,7 +482,12 @@ void EngineShard::PollExecution(const char* context, Transaction* trans) {
       if (VLOG_IS_ON(1)) {
         dbg_id = continuation_trans_->DebugId();
       }
-      CHECK_GT(continuation_trans_->GetRunCount(), 0u);
+      CHECK_GT(continuation_trans_->GetRunCount(), 0u)
+          << continuation_trans_->GetUniqueShardCnt() << " "
+          << continuation_trans_->GetCId()->name() << " " << continuation_trans_->GetUseCount()
+          << " " << continuation_trans_->GetCoordinatorState() << " "
+          << continuation_trans_->GetLocalMask(sid) << " " << continuation_trans_->GetArmed(sid);
+
       bool to_keep = continuation_trans_->RunInShard(this, false);
       DVLOG(1) << "RunContTrans: " << dbg_id << " keep: " << to_keep;
       if (!to_keep) {

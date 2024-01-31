@@ -276,6 +276,10 @@ class Transaction {
     return shard_data_[SidToId(sid)].local_mask;
   }
 
+  uint16_t GetArmed(ShardId sid) const {
+    return shard_data_[SidToId(sid)].is_armed.load(std::memory_order_relaxed);
+  }
+
   uint32_t GetLocalTxqPos(ShardId sid) const {
     return shard_data_[SidToId(sid)].pq_pos;
   }
