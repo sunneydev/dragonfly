@@ -1399,6 +1399,8 @@ void Transaction::DecreaseRunCnt() {
   // finishes running. We can not put it inside the (res == 1) block because then it's too late.
   ::boost::intrusive_ptr guard(this);
 
+  bool is_concluding = (coordinator_state_ & COORD_CONCLUDING);
+
   // We use release so that no stores will be reordered after.
   // It's needed because we need to enforce that all stores executed before this point
   // are visible right after run_count_ is unblocked in the coordinator thread.
@@ -1408,6 +1410,15 @@ void Transaction::DecreaseRunCnt() {
 
   CHECK_GE(res, 1u) << unique_shard_cnt_ << " " << unique_shard_id_ << " " << cid_->name() << " "
                     << use_count_.load(memory_order_relaxed) << " " << uint32_t(coordinator_state_);
+
+  if (res == 1 && is_concluding) {
+    IterateActiveShards([](const PerShardData& sd, ShardId sid) {
+      CHECK(!sd.is_armed.load(memory_order_relaxed))
+          << "we (sid=" << EngineShard::tlocal()->shard_id() << ") decreased runcnt, but "
+          << int(sid) << " is still armed with lmask=" << sd.local_mask
+          << " and txqpos=" << sd.pq_pos;
+    });
+  }
 
   if (res == 1) {
     run_ec_.notify();
