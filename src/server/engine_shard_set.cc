@@ -462,10 +462,7 @@ void EngineShard::PollExecution(const char* context, Transaction* trans) {
     CHECK(continuation_trans_ == nullptr)
         << continuation_trans_->DebugId() << " when polling " << trans->DebugId()
         << "cont_mask: " << continuation_trans_->GetLocalMask(sid) << " vs " << trans_mask;
-    CHECK_GT(trans->GetRunCount(), 0u)
-        << trans->GetUniqueShardCnt() << " " << trans->GetCId()->name() << " "
-        << trans->GetUseCount() << " " << trans->GetCoordinatorState();
-
+    CHECK_GT(trans->GetRunCount(), 0u);
     bool keep = trans->RunInShard(this, false);
     if (keep) {
       return;
@@ -484,11 +481,8 @@ void EngineShard::PollExecution(const char* context, Transaction* trans) {
         dbg_id = continuation_trans_->DebugId();
       }
       CHECK_GT(continuation_trans_->GetRunCount(), 0u)
-          << continuation_trans_->GetUniqueShardCnt() << " "
-          << continuation_trans_->GetCId()->name() << " " << continuation_trans_->GetUseCount()
-          << " " << continuation_trans_->GetCoordinatorState() << " "
-          << continuation_trans_->GetLocalMask(sid) << " " << continuation_trans_->GetArmed(sid)
-          << " " << same;
+          << "ShardId" << sid << ", tx info: " << continuation_trans_->PrintFailState(sid) << " "
+          << same;
 
       bool to_keep = continuation_trans_->RunInShard(this, false);
       DVLOG(1) << "RunContTrans: " << dbg_id << " keep: " << to_keep;

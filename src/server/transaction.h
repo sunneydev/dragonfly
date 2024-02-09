@@ -323,6 +323,8 @@ class Transaction {
     return coordinator_state_;
   }
 
+  std::string PrintFailState(unsigned sid) const;
+
   // If blocking tx was woken up on this shard, get wake key.
   std::optional<std::string_view> GetWakeKey(ShardId sid) const;
 
@@ -396,8 +398,9 @@ class Transaction {
     // this is the only variable that is accessed by both shard and coordinator threads.
     std::atomic_bool is_armed{false};
 
+    uint8_t runcnt = 0;
     // We pad with some memory so that atomic loads won't cause false sharing between threads.
-    char pad[46];  // to make sure PerShardData is 64 bytes and takes full cacheline.
+    char pad[45];  // to make sure PerShardData is 64 bytes and takes full cacheline.
 
     uint32_t arg_start = 0;  // Indices into args_ array.
     uint32_t arg_count = 0;
@@ -441,6 +444,7 @@ class Transaction {
     COORD_BLOCKED = 1 << 2,
     COORD_CANCELLED = 1 << 3,
     COORD_OOO = 1 << 4,
+    COORD_CALLCONCLUDE = 1 << 5,
   };
 
   struct PerShardCache {
@@ -607,6 +611,8 @@ class Transaction {
 
   std::atomic_uint32_t wakeup_requested_{0};  // whether tx was woken up
   std::atomic_uint32_t use_count_{0}, run_count_{0}, seqlock_{0};
+
+  uint32_t run_cnt_orig_ = 0;
 
   // unique_shard_cnt_ and unique_shard_id_ are accessed only by coordinator thread.
   uint32_t unique_shard_cnt_{0};          // Number of unique shards active

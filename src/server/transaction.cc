@@ -493,6 +493,7 @@ bool Transaction::RunInShard(EngineShard* shard, bool txq_ooo) {
   unsigned idx = SidToId(shard->shard_id());
   auto& sd = shard_data_[idx];
 
+  sd.runcnt++;
   CHECK(sd.is_armed.exchange(false, memory_order_relaxed))
       << coordinator_state_ << " " << run_count_.load(memory_order_relaxed) << " " << sd.local_mask;
   CHECK_GT(run_count_.load(memory_order_relaxed), 0u);
@@ -729,7 +730,10 @@ OpStatus Transaction::ScheduleSingleHop(RunnableType cb) {
     DCHECK(shard_data_.size() == 1 || multi_->mode == NON_ATOMIC);
 
     // IsArmedInShard() first checks run_count_ before shard_data, so use release ordering.
-    shard_data_[SidToId(unique_shard_id_)].is_armed.store(true, memory_order_relaxed);
+    unsigned sid = SidToId(unique_shard_id_);
+    run_cnt_orig_ = 1;
+    shard_data_[sid].is_armed.store(true, memory_order_relaxed);
+    shard_data_[sid].runcnt = 0;
     run_count_.store(1, memory_order_release);
 
     time_now_ms_ = GetCurrentTimeMs();
@@ -885,10 +889,13 @@ void Transaction::ExecuteAsync() {
   // by number of callbacks accessing 'this' to allow callbacks to execute shard->Execute(this);
   // safely.
   use_count_.fetch_add(unique_shard_cnt_, memory_order_relaxed);
+  run_cnt_orig_ = unique_shard_cnt_;
 
   // We access sd.is_armed outside of shard-threads but we guard it with run_count_ release.
-  IterateActiveShards(
-      [](PerShardData& sd, auto i) { sd.is_armed.store(true, memory_order_relaxed); });
+  IterateActiveShards([](PerShardData& sd, auto i) {
+    sd.runcnt = 0;
+    sd.is_armed.store(true, memory_order_relaxed);
+  });
 
   uint32_t seq = seqlock_.load(memory_order_relaxed);
 
@@ -951,6 +958,8 @@ void Transaction::ExecuteAsync() {
 }
 
 void Transaction::Conclude() {
+  coordinator_state_ |= COORD_CALLCONCLUDE;
+
   if (!IsScheduled())
     return;
   auto cb = [](Transaction* t, EngineShard* shard) { return OpStatus::OK; };
@@ -1644,6 +1653,17 @@ std::vector<Transaction::PerShardCache>& Transaction::TLTmpSpace::GetShardIndex(
   for (auto& v : shard_cache)
     v.Clear();
   return shard_cache;
+}
+
+string Transaction::PrintFailState(unsigned sid) const {
+  auto res = StrCat("usc: ", GetUniqueShardCnt(), ", name:", GetCId()->name(),
+                    ", usecnt:", GetUseCount(), ", coordstate: ", GetCoordinatorState());
+  absl::StrAppend(&res, ", local_mask: ", GetLocalMask(sid), " ", GetArmed(sid), "\n");
+  for (unsigned i = 0; i < GetUniqueShardCnt(); ++i) {
+    absl::StrAppend(&res, "shard: ", i, ":", GetLocalMask(i), " ", GetArmed(i), ", runcnt",
+                    shard_data_[i].runcnt, "\n");
+  }
+  return res;
 }
 
 }  // namespace dfly
