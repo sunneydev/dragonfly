@@ -494,6 +494,7 @@ bool Transaction::RunInShard(EngineShard* shard, bool txq_ooo) {
   auto& sd = shard_data_[idx];
 
   sd.runcnt++;
+  sd.runcnt_all++;
   CHECK(sd.is_armed.exchange(false, memory_order_relaxed))
       << coordinator_state_ << " " << run_count_.load(memory_order_relaxed) << " " << sd.local_mask;
   CHECK_GT(run_count_.load(memory_order_relaxed), 0u);
@@ -815,9 +816,6 @@ void Transaction::UnlockMulti() {
   unsigned shard_journals_cnt =
       ServerState::tlocal()->journal() ? CalcMultiNumOfShardJournals() : 0;
 
-  uint32_t prev = run_count_.fetch_add(shard_data_.size(), memory_order_relaxed);
-  DCHECK_EQ(prev, 0u);
-
   use_count_.fetch_add(shard_data_.size(), std::memory_order_relaxed);
   for (ShardId i = 0; i < shard_data_.size(); ++i) {
     shard_set->Add(i, [this, sharded_keys, i, shard_journals_cnt]() {
@@ -1006,6 +1004,10 @@ Transaction::RunnableResult Transaction::RunQuickie(EngineShard* shard) {
   auto& sd = shard_data_[SidToId(unique_shard_id_)];
   DCHECK_EQ(0, sd.local_mask & (KEYLOCK_ACQUIRED | OUT_OF_ORDER));
 
+  CHECK(sd.is_armed.exchange(false)) << PrintFailState(unique_shard_id_);
+  sd.runcnt++;
+  sd.runcnt_all++;
+
   DVLOG(1) << "RunQuickSingle " << DebugId() << " " << shard->shard_id();
   DCHECK(cb_ptr_) << DebugId() << " " << shard->shard_id();
 
@@ -1024,7 +1026,6 @@ Transaction::RunnableResult Transaction::RunQuickie(EngineShard* shard) {
 
   // Handling the result, along with conclusion and journaling, is done by the caller
 
-  sd.is_armed.store(false, memory_order_relaxed);
   cb_ptr_ = nullptr;  // We can do it because only a single shard runs the callback.
   return result;
 }
@@ -1041,7 +1042,10 @@ void Transaction::ExpireBlocking(WaitKeysProvider wcb) {
     EngineShard* es = EngineShard::tlocal();
     ExpireShardCb(wcb(this, es), es);
   };
-  IterateActiveShards([&expire_cb](PerShardData& sd, auto i) { shard_set->Add(i, expire_cb); });
+  IterateActiveShards([&expire_cb](PerShardData& sd, auto i) {
+    sd.runcnt = 0;
+    shard_set->Add(i, expire_cb);
+  });
 
   WaitForShardCallbacks();
   DVLOG(1) << "ExpireBlocking finished " << DebugId();
@@ -1323,6 +1327,8 @@ void Transaction::ExpireShardCb(ArgSlice wkeys, EngineShard* shard) {
   auto& sd = shard_data_[sd_idx];
   sd.local_mask |= EXPIRED_Q;
   sd.local_mask &= ~KEYLOCK_ACQUIRED;
+  sd.runcnt++;
+  sd.runcnt_all++;
 
   shard->blocking_controller()->FinalizeWatched(wkeys, this);
   DCHECK(!shard->blocking_controller()->awakened_transactions().contains(this));
@@ -1390,8 +1396,6 @@ void Transaction::UnlockMultiShardCb(const KeyList& sharded_keys, EngineShard* s
     shard->blocking_controller()->NotifyPending();
 
   shard->PollExecution("unlockmulti", nullptr);
-
-  this->DecreaseRunCnt();
 }
 
 void Transaction::DecreaseRunCnt() {
@@ -1400,6 +1404,10 @@ void Transaction::DecreaseRunCnt() {
   ::boost::intrusive_ptr guard(this);
 
   bool is_concluding = (coordinator_state_ & COORD_CONCLUDING);
+  //  auto& sd = shard_data_[SidToId(EngineShard::tlocal()->shard_id())];
+
+  // CHECK_EQ(sd.runcnt, 1) << "Ran more than once. Fail "
+  //                        << PrintFailState(EngineShard::tlocal()->shard_id());
 
   // We use release so that no stores will be reordered after.
   // It's needed because we need to enforce that all stores executed before this point
@@ -1412,11 +1420,10 @@ void Transaction::DecreaseRunCnt() {
                     << use_count_.load(memory_order_relaxed) << " " << uint32_t(coordinator_state_);
 
   if (res == 1 && is_concluding) {
-    IterateActiveShards([](const PerShardData& sd, ShardId sid) {
+    IterateActiveShards([this](const PerShardData& sd, ShardId sid) {
       CHECK(!sd.is_armed.load(memory_order_relaxed))
           << "we (sid=" << EngineShard::tlocal()->shard_id() << ") decreased runcnt, but "
-          << int(sid) << " is still armed with lmask=" << sd.local_mask
-          << " and txqpos=" << sd.pq_pos;
+          << int(sid) << " is still armed. Fail: " << PrintFailState(sid);
     });
   }
 
@@ -1667,12 +1674,14 @@ std::vector<Transaction::PerShardCache>& Transaction::TLTmpSpace::GetShardIndex(
 }
 
 string Transaction::PrintFailState(unsigned sid) const {
-  auto res = StrCat("usc: ", GetUniqueShardCnt(), ", name:", GetCId()->name(),
-                    ", usecnt:", GetUseCount(), ", coordstate: ", GetCoordinatorState());
+  auto res =
+      StrCat("usc: ", GetUniqueShardCnt(), ", name:", GetCId()->name(), ", usecnt:", GetUseCount(),
+             ", coordstate: ", GetCoordinatorState(), " orig_run_cnt: ", run_cnt_orig_);
   absl::StrAppend(&res, ", local_mask: ", GetLocalMask(sid), " ", GetArmed(sid), "\n");
   for (unsigned i = 0; i < GetUniqueShardCnt(); ++i) {
-    absl::StrAppend(&res, "shard: ", i, ":", GetLocalMask(i), " ", GetArmed(i), ", runcnt",
-                    shard_data_[i].runcnt, "\n");
+    absl::StrAppend(&res, "shard: ", i, " local_mask:", GetLocalMask(i), " armed:", GetArmed(i),
+                    ", runcnt:", shard_data_[i].runcnt, ", runcnt_all:", shard_data_[i].runcnt_all,
+                    "\n");
   }
   return res;
 }

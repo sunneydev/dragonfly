@@ -399,8 +399,10 @@ class Transaction {
     std::atomic_bool is_armed{false};
 
     uint8_t runcnt = 0;
+    uint8_t runcnt_all = 0;
+
     // We pad with some memory so that atomic loads won't cause false sharing between threads.
-    char pad[45];  // to make sure PerShardData is 64 bytes and takes full cacheline.
+    char pad[44];  // to make sure PerShardData is 64 bytes and takes full cacheline.
 
     uint32_t arg_start = 0;  // Indices into args_ array.
     uint32_t arg_count = 0;
