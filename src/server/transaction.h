@@ -633,6 +633,8 @@ class Transaction {
   // Result of callbacks. Usually written by single shard only, lock below for multishard oom error
   OpStatus local_result_ = OpStatus::OK;
   absl::base_internal::SpinLock local_result_mu_;
+  unsigned coordinator_thread_id_ = 0;
+  unsigned scheduled_attempts_ = 0;
 
  private:
   struct TLTmpSpace {

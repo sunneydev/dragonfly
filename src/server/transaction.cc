@@ -631,9 +631,11 @@ void Transaction::ScheduleInternal() {
   DVLOG(1) << "ScheduleInternal " << cid_->name() << " on " << unique_shard_cnt_ << " shards";
 
   auto is_active = [this](uint32_t i) { return IsActive(i); };
+  coordinator_thread_id_ = ProactorBase::me()->GetPoolIndex();
 
   // Loop until successfully scheduled in all shards.
   while (true) {
+    ++scheduled_attempts_;
     txid_ = op_seq.fetch_add(1, memory_order_relaxed);
     time_now_ms_ = GetCurrentTimeMs();
 
@@ -1680,6 +1682,8 @@ string Transaction::PrintFailState(unsigned sid) const {
       StrCat("usc: ", GetUniqueShardCnt(), ", name:", GetCId()->name(), ", usecnt:", GetUseCount(),
              ", coordstate: ", GetCoordinatorState(), " orig_run_cnt: ", run_cnt_orig_);
   absl::StrAppend(&res, ", local_mask: ", GetLocalMask(sid), " ", GetArmed(sid), "\n");
+  absl::StrAppend(&res, "coordinator_id: ", coordinator_thread_id_,
+                  ", scheduled_attempts:", scheduled_attempts_, "\n");
   for (unsigned i = 0; i < shard_data_.size(); ++i) {
     const auto& sd = shard_data_[i];
     absl::StrAppend(&res, "shard: ", i, " local_mask:", sd.local_mask,
