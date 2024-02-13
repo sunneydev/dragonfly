@@ -1420,6 +1420,8 @@ void Transaction::DecreaseRunCnt() {
                     << use_count_.load(memory_order_relaxed) << " " << uint32_t(coordinator_state_);
 
   if (res == 1 && is_concluding) {
+    std::atomic_thread_fence(std::memory_order_acquire);
+
     IterateActiveShards([this](const PerShardData& sd, ShardId sid) {
       CHECK(!sd.is_armed.load(memory_order_relaxed))
           << "we (sid=" << EngineShard::tlocal()->shard_id() << ") decreased runcnt, but "
@@ -1678,10 +1680,11 @@ string Transaction::PrintFailState(unsigned sid) const {
       StrCat("usc: ", GetUniqueShardCnt(), ", name:", GetCId()->name(), ", usecnt:", GetUseCount(),
              ", coordstate: ", GetCoordinatorState(), " orig_run_cnt: ", run_cnt_orig_);
   absl::StrAppend(&res, ", local_mask: ", GetLocalMask(sid), " ", GetArmed(sid), "\n");
-  for (unsigned i = 0; i < GetUniqueShardCnt(); ++i) {
-    absl::StrAppend(&res, "shard: ", i, " local_mask:", GetLocalMask(i), " armed:", GetArmed(i),
-                    ", runcnt:", shard_data_[i].runcnt, ", runcnt_all:", shard_data_[i].runcnt_all,
-                    "\n");
+  for (unsigned i = 0; i < shard_data_.size(); ++i) {
+    const auto& sd = shard_data_[i];
+    absl::StrAppend(&res, "shard: ", i, " local_mask:", sd.local_mask,
+                    " armed:", sd.is_armed.load(memory_order_relaxed), ", runcnt:", sd.runcnt,
+                    ", runcnt_all:", sd.runcnt_all, "\n");
   }
   return res;
 }
