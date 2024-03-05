@@ -478,13 +478,18 @@ void EngineShard::PollExecution(const char* context, Transaction* trans) {
     if (trans == continuation_trans_)
       trans = nullptr;
 
-    if (continuation_trans_->IsArmedInShard(sid)) {
+    uint32_t run_cnt = continuation_trans_->RunBarrierCount();
+    if (run_cnt > 0 && (continuation_trans_->GetLocalMask(sid) & Transaction::ARMED)) {
       if (VLOG_IS_ON(1)) {
         dbg_id = continuation_trans_->DebugId();
       }
 
-      bool to_keep = continuation_trans_->RunInShard(this, false);
+      CHECK_GT(continuation_trans_->DEBUG_RunCount(), 0u)
+          << "ShardId" << sid << "original_run_cnt " << run_cnt
+          << ", tx info: " << continuation_trans_->DEBUG_PrintFailState(sid);
 
+      bool to_keep = continuation_trans_->RunInShard(this, false);
+      CHECK(!to_keep) << "RunContTrans: " << continuation_trans_->DebugId();
       DVLOG(1) << "RunContTrans: " << dbg_id << " keep: " << to_keep;
       if (!to_keep) {
         // if this holds, we can remove this check altogether.

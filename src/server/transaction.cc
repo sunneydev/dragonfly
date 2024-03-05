@@ -202,6 +202,15 @@ Transaction::Transaction(const Transaction* parent, ShardId shard_id, std::optio
 Transaction::~Transaction() {
   DVLOG(3) << "Transaction " << StrCat(Name(), "@", txid_, "/", unique_shard_cnt_, ")")
            << " destroyed";
+  CHECK_EQ(run_barrier_.DEBUG_Count(), 0u);
+
+  if (unique_shard_cnt_ == 2 && Name() == "RPOPLPUSH") {
+    for (const auto& sd : shard_data_) {
+      if (sd.local_mask & ACTIVE) {
+        CHECK_EQ(2u, sd.stats.total_runs);
+      }
+    }
+  }
 }
 
 void Transaction::InitBase(DbIndex dbid, CmdArgList args) {

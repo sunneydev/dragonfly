@@ -357,6 +357,14 @@ class Transaction {
   // Print in-dept failure state for debugging.
   std::string DEBUG_PrintFailState(ShardId sid) const;
 
+  uint32_t RunBarrierCount() const {
+    return run_barrier_.Count();
+  }
+
+  uint32_t DEBUG_RunCount() const {
+    return run_barrier_.DEBUG_Count();
+  }
+
  private:
   // Holds number of locks for each IntentLock::Mode: shared and exlusive.
   struct LockCnt {
@@ -447,6 +455,11 @@ class Transaction {
     void Dec(Transaction* keep_alive);  // Release: Decrease count, notify ec on count = 0
 
     uint32_t DEBUG_Count() const;  // Get current counter value
+
+    uint32_t Count() const {
+      return count_.load(std::memory_order_acquire);
+    }
+
    private:
     std::atomic_uint32_t count_{0};
     util::fb2::EventCount ec_{};
@@ -579,7 +592,6 @@ class Transaction {
     });
   }
 
- private:
   // Main synchronization point for dispatching hop callbacks and waiting for them to finish.
   // After scheduling, sequential hops are executed as follows:
   //    coordinator: Prepare hop, then Start(num_shards), dispatch poll jobs and Wait()
