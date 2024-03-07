@@ -1200,6 +1200,8 @@ void Service::DispatchCommand(CmdArgList args, facade::ConnectionContext* cntx) 
   }
 
   if (!dispatching_in_multi) {
+    if (dfly_cntx->transaction)
+      dfly_cntx->transaction->Shutdown();
     dfly_cntx->transaction = nullptr;
   }
 }

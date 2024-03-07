@@ -365,6 +365,10 @@ class Transaction {
     return run_barrier_.DEBUG_Count();
   }
 
+  void Shutdown() {
+    coordinator_state_ |= COORD_TERMINATING;
+  }
+
  private:
   // Holds number of locks for each IntentLock::Mode: shared and exlusive.
   struct LockCnt {
@@ -396,6 +400,7 @@ class Transaction {
     // Irrational stats purely for debugging purposes.
     struct Stats {
       unsigned total_runs = 0;  // total number of runs
+      unsigned decrements = 0;
     } stats;
 
     // Prevent "false sharing" between cache lines: occupy a full cache line (64 bytes)
@@ -431,6 +436,7 @@ class Transaction {
     COORD_SCHED = 1,
     COORD_CONCLUDING = 1 << 1,  // Whether its the last hop of a transaction
     COORD_CANCELLED = 1 << 2,
+    COORD_TERMINATING = 1 << 3,
   };
 
   // Auxiliary structure used during initialization
@@ -460,8 +466,12 @@ class Transaction {
       return count_.load(std::memory_order_acquire);
     }
 
+    std::string DebugPrint() const;
+
    private:
     std::atomic_uint32_t count_{0};
+    uint8_t start_trace_[8];
+    uint8_t start_len_ = 0;
     util::fb2::EventCount ec_{};
   };
 
@@ -591,6 +601,8 @@ class Transaction {
         f(sd, i);
     });
   }
+
+  uint64_t dummy_pad_ = 0;
 
   // Main synchronization point for dispatching hop callbacks and waiting for them to finish.
   // After scheduling, sequential hops are executed as follows:

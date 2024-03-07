@@ -485,7 +485,7 @@ void EngineShard::PollExecution(const char* context, Transaction* trans) {
       }
 
       CHECK_GT(continuation_trans_->DEBUG_RunCount(), 0u)
-          << "ShardId" << sid << "original_run_cnt " << run_cnt
+          << "ShardId:" << sid << ", original_run_cnt " << run_cnt
           << ", tx info: " << continuation_trans_->DEBUG_PrintFailState(sid);
 
       bool to_keep = continuation_trans_->RunInShard(this, false);

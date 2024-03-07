@@ -96,9 +96,21 @@ IntentLock::Mode Transaction::LockMode() const {
   return cid_->IsReadOnly() ? IntentLock::SHARED : IntentLock::EXCLUSIVE;
 }
 
+string Transaction::PhasedBarrier::DebugPrint() const {
+  string res = StrCat("runcnt: ", count_.load(std::memory_order_relaxed), ", starts:[");
+  for (int i = 0; i < start_len_; ++i) {
+    absl::StrAppend(&res, unsigned(start_trace_[i]), ", ");
+  }
+  absl::StrAppend(&res, "]");
+  return res;
+}
+
 void Transaction::PhasedBarrier::Start(uint32_t count) {
   DCHECK_EQ(DEBUG_Count(), 0u);
-  count_.store(count, memory_order_release);
+  start_trace_[start_len_++] = count;
+  start_len_ &= 7;
+  uint32_t prev = count_.exchange(count, memory_order_acq_rel);
+  CHECK_EQ(prev, 0u);
 }
 
 bool Transaction::PhasedBarrier::Active() const {
@@ -110,7 +122,7 @@ void Transaction::PhasedBarrier::Dec(Transaction* keep_alive) {
   // but before this thread finished notifying.
   ::boost::intrusive_ptr guard(keep_alive);
 
-  uint32_t before = count_.fetch_sub(1);
+  uint32_t before = count_.fetch_sub(1, memory_order_relaxed);
   CHECK_GE(before, 1u) << keep_alive->DEBUG_PrintFailState(EngineShard::tlocal()->shard_id());
   if (before == 1)
     ec_.notify();
@@ -183,6 +195,8 @@ Transaction::Transaction(const Transaction* parent, ShardId shard_id, std::optio
       txid_{parent->txid()},
       unique_shard_cnt_{1},
       unique_shard_id_{shard_id} {
+  static_assert(offsetof(Transaction, run_barrier_) == 8);
+
   if (parent->multi_) {
     multi_->mode = parent->multi_->mode;
   } else {
@@ -200,6 +214,7 @@ Transaction::Transaction(const Transaction* parent, ShardId shard_id, std::optio
 }
 
 Transaction::~Transaction() {
+  CHECK_EQ(dummy_pad_, 0u);
   DVLOG(3) << "Transaction " << StrCat(Name(), "@", txid_, "/", unique_shard_cnt_, ")")
            << " destroyed";
   CHECK_EQ(run_barrier_.DEBUG_Count(), 0u);
@@ -735,6 +750,7 @@ bool Transaction::RunInShard(EngineShard* shard, bool txq_ooo) {
     }
   }
 
+  sd.stats.decrements++;
   run_barrier_.Dec(this);  // From this point on we can not access 'this'.
   return !is_concluding;
 }
@@ -850,6 +866,7 @@ OpStatus Transaction::ScheduleSingleHop(RunnableType cb) {
         // We didn't decrease the barrier, so the scope is valid UNTIL Dec() below
         DCHECK_EQ(run_barrier_.DEBUG_Count(), 1u);
         was_ooo = true;
+        shard_data_[SidToId(unique_shard_id_)].stats.decrements++;
         run_barrier_.Dec(this);
       }
       // Otherwise it's not safe to access the function scope, as
@@ -1038,14 +1055,15 @@ void Transaction::FIX_ConcludeJournalExec() {
 string Transaction::DEBUG_PrintFailState(ShardId sid) const {
   auto res = StrCat(
       "usc: ", unique_shard_cnt_, ", name:", GetCId()->name(),
-      ", usecnt:", use_count_.load(memory_order_relaxed), ", runcnt: ", run_barrier_.DEBUG_Count(),
-      ", coordstate: ", coordinator_state_, ", coord native thread: ", stats_.coordinator_index,
+      ", usecnt:", use_count_.load(memory_order_relaxed), ", barrier: ", run_barrier_.DebugPrint(),
+      "\n, coordstate: ", coordinator_state_, ", coord native thread: ", stats_.coordinator_index,
       ", schedule attempts: ", stats_.schedule_attempts, ", report from sid: ", sid, "\n");
   std::atomic_thread_fence(memory_order_acquire);
   for (unsigned i = 0; i < shard_data_.size(); ++i) {
     const auto& sd = shard_data_[i];
     absl::StrAppend(&res, "- shard: ", i, " local_mask:", sd.local_mask,
-                    " total_runs: ", sd.stats.total_runs, "\n");
+                    " total_runs: ", sd.stats.total_runs, " decrements:", sd.stats.decrements,
+                    "\n");
   }
   return res;
 }
@@ -1409,6 +1427,8 @@ void Transaction::ExpireShardCb(ArgSlice wkeys, EngineShard* shard) {
 
   // Resume processing of transaction queue
   shard->PollExecution("unwatchcb", nullptr);
+  sd.stats.decrements++;
+
   run_barrier_.Dec(this);
 }
 
