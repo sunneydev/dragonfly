@@ -5,6 +5,7 @@
 #include "server/transaction.h"
 
 #include <absl/strings/match.h>
+#include <atomic>
 
 #include "base/logging.h"
 #include "server/blocking_controller.h"
@@ -122,7 +123,7 @@ void Transaction::PhasedBarrier::Dec(Transaction* keep_alive) {
   // but before this thread finished notifying.
   ::boost::intrusive_ptr guard(keep_alive);
 
-  uint32_t before = count_.fetch_sub(1, memory_order_relaxed);
+  uint32_t before = count_.fetch_sub(1, memory_order_release);
   CHECK_GE(before, 1u) << keep_alive->DEBUG_PrintFailState(EngineShard::tlocal()->shard_id());
   if (before == 1)
     ec_.notify();
