@@ -612,6 +612,7 @@ class Transaction {
   // can safely read transaction state and modify per-shard state belonging to them.
   // Inter-thread synchronization is provided by the barriers acquire/release pairs.
   PhasedBarrier run_barrier_;
+  mutable absl::base_internal::SpinLock barrier_mu_;
 
   // Stores per-shard data: state flags and keys. Index only with SidToId(shard index)!
   // Theoretically, same size as number of shards, but contains only a single element for

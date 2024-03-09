@@ -5,7 +5,9 @@
 #include "server/transaction.h"
 
 #include <absl/strings/match.h>
+
 #include <atomic>
+#include <mutex>
 
 #include "base/logging.h"
 #include "server/blocking_controller.h"
@@ -856,10 +858,13 @@ OpStatus Transaction::ScheduleSingleHop(RunnableType cb) {
     DCHECK(shard_data_.size() == 1 || multi_);
 
     InitTxTime();
-    shard_data_[SidToId(unique_shard_id_)].local_mask |= ARMED;
+    {
+      absl::base_internal::SpinLockHolder lock{&barrier_mu_};
+      shard_data_[SidToId(unique_shard_id_)].local_mask |= ARMED;
 
-    // Start new phase, be careful with writes until phase end!
-    run_barrier_.Start(1);
+      // Start new phase, be careful with writes until phase end!
+      run_barrier_.Start(1);
+    }
 
     auto schedule_cb = [this, &was_ooo] {
       bool run_fast = ScheduleUniqueShard(EngineShard::tlocal());
@@ -994,17 +999,20 @@ void Transaction::ExecuteAsync() {
   DCHECK(!IsAtomicMulti() || multi_->lock_mode.has_value());
   DCHECK_LE(shard_data_.size(), 1024u);
 
-  // Set armed flags on all active shards. Copy indices for dispatching poll tasks,
-  // because local_mask can be written concurrently after starting a new phase.
   std::bitset<1024> poll_flags(0);
-  IterateActiveShards([&poll_flags](auto& sd, auto i) {
-    sd.local_mask |= ARMED;
-    poll_flags.set(i, true);
-  });
+  {
+    absl::base_internal::SpinLockHolder lk{&barrier_mu_};
+    // Set armed flags on all active shards. Copy indices for dispatching poll tasks,
+    // because local_mask can be written concurrently after starting a new phase.
+    IterateActiveShards([&poll_flags](auto& sd, auto i) {
+      sd.local_mask |= ARMED;
+      poll_flags.set(i, true);
+    });
 
-  // Start new phase: release semantics. From here we can be discovered by IsArmedInShard(),
-  // and thus picked by a foreign thread's PollExecution(). Careful with data access!
-  run_barrier_.Start(unique_shard_cnt_);
+    // Start new phase: release semantics. From here we can be discovered by IsArmedInShard(),
+    // and thus picked by a foreign thread's PollExecution(). Careful with data access!
+    run_barrier_.Start(unique_shard_cnt_);
+  }
 
   auto* ss = ServerState::tlocal();
   if (unique_shard_cnt_ == 1 && ss->thread_index() == unique_shard_id_ &&
@@ -1161,6 +1169,7 @@ KeyLockArgs Transaction::GetLockArgs(ShardId sid) const {
 }
 
 bool Transaction::IsArmedInShard(ShardId sid) const {
+  absl::base_internal::SpinLockHolder lock{&barrier_mu_};
   // Barrier has acquire semantics
   return run_barrier_.Active() && (shard_data_[SidToId(sid)].local_mask & ARMED);
 }
