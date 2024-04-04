@@ -170,7 +170,6 @@ class Transaction {
     RAN_IMMEDIATELY = 1 << 7,  // Whether the shard executed immediately (during schedule)
   };
 
- public:
   explicit Transaction(const CommandId* cid);
 
   // Initialize transaction for squashing placed on a specific shard with a given parent tx
@@ -474,7 +473,6 @@ class Transaction {
     util::fb2::EventCount ec_{};
   };
 
- private:
   // Init basic fields and reset re-usable.
   void InitBase(DbIndex dbid, CmdArgList args);
 
@@ -500,6 +498,7 @@ class Transaction {
   // Multi transactions unlock asynchronously, so they need to keep a copy of all they keys.
   // "Launder" keys by filtering uniques and replacing pointers with same lifetime as transaction.
   void LaunderKeyStorage(CmdArgVec* keys);
+  bool CheckLock(EngineShard* shard, IntentLock::Mode mode, const KeyLockArgs& lock_args);
 
   // Generic schedule used from Schedule() and ScheduleSingleHop() on slow path.
   void ScheduleInternal();

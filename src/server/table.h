@@ -90,6 +90,8 @@ class LockTable {
   bool Acquire(std::string_view key, IntentLock::Mode mode);
   void Release(std::string_view key, IntentLock::Mode mode);
 
+  static uint64_t Fingerprint(std::string_view key);
+
   auto begin() const {
     return locks_.cbegin();
   }
@@ -99,26 +101,13 @@ class LockTable {
   }
 
  private:
-  struct Key {
-    operator std::string_view() const {
-      return visit([](const auto& s) -> std::string_view { return s; }, val_);
+  // We use fingerprinting before accessing locks - no need to mix more.
+  struct Hasher {
+    size_t operator()(uint64_t val) const {
+      return val;
     }
-
-    bool operator==(const Key& o) const {
-      return *this == std::string_view(o);
-    }
-
-    friend std::ostream& operator<<(std::ostream& o, const Key& key) {
-      return o << std::string_view(key);
-    }
-
-    // If the key is backed by a string_view, replace it with a string with the same value
-    void MakeOwned() const;
-
-    mutable std::variant<std::string_view, std::string> val_;
   };
-
-  absl::flat_hash_map<Key, IntentLock> locks_;
+  absl::flat_hash_map<uint64_t, IntentLock, Hasher> locks_;
 };
 
 // A single Db table that represents a table that can be chosen with "SELECT" command.

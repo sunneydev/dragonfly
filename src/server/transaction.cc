@@ -51,7 +51,7 @@ void AnalyzeTxQueue(const EngineShard* shard, const TxQueue* txq) {
                  ", runnable:", info.tx_runnable, ", total locks: ", info.total_locks,
                  ", contended locks: ", info.contended_locks, "\n");
       absl::StrAppend(&msg, "max contention score: ", info.max_contention_score,
-                      ", lock: ", info.max_contention_lock_name,
+                      ", lock: ", info.max_contention_lock,
                       ", poll_executions:", shard->stats().poll_execution_total);
       const Transaction* cont_tx = shard->GetContTx();
       if (cont_tx) {
@@ -263,6 +263,17 @@ void Transaction::LaunderKeyStorage(CmdArgVec* keys) {
   keys->clear();
   for (string& key : m_keys)
     keys->emplace_back(key.data(), key.size());
+}
+
+bool Transaction::CheckLock(EngineShard* shard, IntentLock::Mode mode,
+                            const KeyLockArgs& lock_args) {
+  const auto& db_slice = shard->db_slice();
+  for (size_t i = 0; i < lock_args.args.size(); i += lock_args.key_step) {
+    string_view s = KeyLockArgs::GetLockKey(lock_args.args[i]);
+    if (!db_slice.CheckLock(mode, lock_args.db_index, s))
+      return false;
+  }
+  return true;
 }
 
 void Transaction::StoreKeysInArgs(const KeyIndex& key_index) {
@@ -1076,7 +1087,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool can_run_immediately) 
     bool shard_unlocked = shard->shard_lock()->Check(mode);
 
     // Check if we can run immediately
-    if (shard_unlocked && can_run_immediately && shard->db_slice().CheckLock(mode, lock_args)) {
+    if (shard_unlocked && can_run_immediately && CheckLock(shard, mode, lock_args)) {
       sd.local_mask |= RAN_IMMEDIATELY;
       shard->stats().tx_immediate_total++;
 
