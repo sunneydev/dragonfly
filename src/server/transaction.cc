@@ -198,7 +198,7 @@ void Transaction::BuildShardIndex(const KeyIndex& key_index, std::vector<PerShar
     unique_slot_checker_.Add(key);
     uint32_t sid = Shard(key, shard_data_.size());
     add(sid, i);
-
+    shard_index[sid].key_step = key_index.step;
     DCHECK_LE(key_index.step, 2u);
     if (key_index.step == 2) {  // Handle value associated with preceding key.
       add(sid, ++i);
@@ -209,6 +209,8 @@ void Transaction::BuildShardIndex(const KeyIndex& key_index, std::vector<PerShar
 void Transaction::InitShardData(absl::Span<const PerShardCache> shard_index, size_t num_args,
                                 bool rev_mapping) {
   kv_args_.reserve(num_args);
+  kv_fp_.reserve(num_args);
+
   if (rev_mapping)
     reverse_index_.reserve(num_args);
 
@@ -233,7 +235,13 @@ void Transaction::InitShardData(absl::Span<const PerShardCache> shard_index, siz
     unique_shard_id_ = i;
 
     for (size_t j = 0; j < si.args.size(); ++j) {
-      kv_args_.push_back(si.args[j]);
+      string_view arg = si.args[j];
+      kv_args_.push_back(arg);
+      if (si.key_step == 1 || j % si.key_step == 0) {
+        kv_fp_.push_back(LockTable::Fingerprint(KeyLockArgs::GetLockKey(arg)));
+      } else {
+        kv_fp_.push_back(0);
+      }
       if (rev_mapping)
         reverse_index_.push_back(si.original_index[j]);
     }
@@ -266,11 +274,10 @@ void Transaction::LaunderKeyStorage(CmdArgVec* keys) {
 }
 
 bool Transaction::CheckLock(EngineShard* shard, IntentLock::Mode mode,
-                            const KeyLockArgs& lock_args) {
+                            const KeyLockArgs2& lock_args) {
   const auto& db_slice = shard->db_slice();
-  for (size_t i = 0; i < lock_args.args.size(); i += lock_args.key_step) {
-    string_view s = KeyLockArgs::GetLockKey(lock_args.args[i]);
-    if (!db_slice.CheckLock(mode, lock_args.db_index, s))
+  for (size_t i = 0; i < lock_args.fps.size(); i += lock_args.key_step) {
+    if (!db_slice.CheckLock(mode, lock_args.db_index, lock_args.fps[i]))
       return false;
   }
   return true;
@@ -283,6 +290,7 @@ void Transaction::StoreKeysInArgs(const KeyIndex& key_index) {
   // even for a single key we may have multiple arguments per key (MSET).
   for (unsigned j = key_index.start; j < key_index.end; j++) {
     kv_args_.push_back(ArgS(full_args_, j));
+
     if (key_index.step == 2)
       kv_args_.push_back(ArgS(full_args_, ++j));
   }
@@ -600,14 +608,14 @@ bool Transaction::RunInShard(EngineShard* shard, bool txq_ooo) {
   // If it's a final hop we should release the locks.
   if (is_concluding) {
     bool became_suspended = sd.local_mask & SUSPENDED_Q;
-    KeyLockArgs largs;
+    KeyLockArgs2 largs;
 
     if (IsGlobal()) {
       DCHECK(!awaked_prerun && !became_suspended);  // Global transactions can not be blocking.
       VLOG(2) << "Releasing shard lock";
       shard->shard_lock()->Release(LockMode());
     } else {  // not global.
-      largs = GetLockArgs(idx);
+      largs = GetLockArgs2(idx);
       DCHECK(sd.local_mask & KEYLOCK_ACQUIRED);
 
       // If a transaction has been suspended, we keep the lock so that future transaction
@@ -635,7 +643,7 @@ bool Transaction::RunInShard(EngineShard* shard, bool txq_ooo) {
     if (auto* bcontroller = shard->blocking_controller(); bcontroller) {
       if (awaked_prerun || was_suspended) {
         CHECK_EQ(largs.key_step, 1u);
-        bcontroller->FinalizeWatched(largs.args, this);
+        bcontroller->FinalizeWatched(GetShardArgs(idx), this);
       }
 
       // Wake only if no tx queue head is currently running
@@ -1024,6 +1032,20 @@ KeyLockArgs Transaction::GetLockArgs(ShardId sid) const {
   return res;
 }
 
+KeyLockArgs2 Transaction::GetLockArgs2(ShardId sid) const {
+  KeyLockArgs2 res;
+  res.db_index = db_index_;
+  res.key_step = cid_->opt_mask() & CO::INTERLEAVED_KEYS ? 2 : 1;
+
+  if (unique_shard_cnt_ == 1) {
+    res.fps = {kv_fp_.data(), kv_fp_.size()};
+  } else {
+    const auto& sd = shard_data_[sid];
+    res.fps = {kv_fp_.data() + sd.arg_start, sd.arg_count};
+  }
+  return res;
+}
+
 uint16_t Transaction::DisarmInShard(ShardId sid) {
   auto& sd = shard_data_[SidToId(sid)];
   // NOTE: Maybe compare_exchange is worth it to avoid redundant writes
@@ -1073,7 +1095,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool can_run_immediately) 
   sd.local_mask &= ~(OUT_OF_ORDER | RAN_IMMEDIATELY);
 
   TxQueue* txq = shard->txq();
-  KeyLockArgs lock_args;
+  KeyLockArgs2 lock_args;
   IntentLock::Mode mode = LockMode();
   bool lock_granted = false;
 
@@ -1083,7 +1105,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool can_run_immediately) 
 
   // Acquire intent locks. Intent locks are always acquired, even if already locked by others.
   if (!IsGlobal()) {
-    lock_args = GetLockArgs(shard->shard_id());
+    lock_args = GetLockArgs2(shard->shard_id());
     bool shard_unlocked = shard->shard_lock()->Check(mode);
 
     // Check if we can run immediately
@@ -1137,7 +1159,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool can_run_immediately) 
   DCHECK_EQ(TxQueue::kEnd, sd.pq_pos);
   sd.pq_pos = it;
 
-  AnalyzeTxQueue(shard, txq);
+  // AnalyzeTxQueue(shard, txq);
   DVLOG(1) << "Insert into tx-queue, sid(" << sid << ") " << DebugId() << ", qlen " << txq->size();
 
   return true;
@@ -1163,9 +1185,8 @@ bool Transaction::CancelShardCb(EngineShard* shard) {
   if (IsGlobal()) {
     shard->shard_lock()->Release(LockMode());
   } else {
-    auto lock_args = GetLockArgs(shard->shard_id());
+    auto lock_args = GetLockArgs2(shard->shard_id());
     DCHECK(sd.local_mask & KEYLOCK_ACQUIRED);
-    DCHECK(!lock_args.args.empty());
     shard->db_slice().Release(LockMode(), lock_args);
     sd.local_mask &= ~KEYLOCK_ACQUIRED;
   }

@@ -1027,6 +1027,57 @@ bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args) {
   return lock_acquired;
 }
 
+bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs2& lock_args) {
+  if (lock_args.fps.empty()) {  // Can be empty for NO_KEY_TRANSACTIONAL commands.
+    return true;
+  }
+  DCHECK_GT(lock_args.key_step, 0u);
+
+  auto& lt = db_arr_[lock_args.db_index]->trans_locks;
+  bool lock_acquired = true;
+
+  if (lock_args.fps.size() == 1) {
+    lock_acquired = lt.Acquire(lock_args.fps.front(), mode);
+    uniq_keys2_ = {lock_args.fps.front()};  // needed only for tests.
+  } else {
+    uniq_keys2_.clear();
+
+    for (size_t i = 0; i < lock_args.fps.size(); i += lock_args.key_step) {
+      uint64_t fp = lock_args.fps[i];
+      if (uniq_keys2_.insert(fp).second) {
+        lock_acquired &= lt.Acquire(fp, mode);
+      }
+    }
+  }
+
+  DVLOG(2) << "Acquire " << IntentLock::ModeName(mode) << " for " << lock_args.fps[0]
+           << " has_acquired: " << lock_acquired;
+
+  return lock_acquired;
+}
+
+void DbSlice::Release(IntentLock::Mode mode, const KeyLockArgs2& lock_args) {
+  if (lock_args.fps.empty()) {  // Can be empty for NO_KEY_TRANSACTIONAL commands.
+    return;
+  }
+
+  DVLOG(2) << "Release " << IntentLock::ModeName(mode) << " for " << lock_args.fps[0];
+  auto& lt = db_arr_[lock_args.db_index]->trans_locks;
+  if (lock_args.fps.size() == 1) {
+    uint64_t fp = lock_args.fps.front();
+    lt.Release(fp, mode);
+  } else {
+    uniq_keys_.clear();
+    for (size_t i = 0; i < lock_args.fps.size(); i += lock_args.key_step) {
+      uint64_t fp = lock_args.fps[i];
+      if (uniq_keys2_.insert(fp).second) {
+        lt.Release(fp, mode);
+      }
+    }
+  }
+  uniq_keys_.clear();
+}
+
 void DbSlice::ReleaseNormalized(IntentLock::Mode mode, DbIndex db_index, std::string_view key) {
   DCHECK_EQ(key, KeyLockArgs::GetLockKey(key));
   DVLOG(2) << "Release " << IntentLock::ModeName(mode) << " "
@@ -1063,6 +1114,15 @@ bool DbSlice::CheckLock(IntentLock::Mode mode, DbIndex dbid, string_view key) co
   string_view s = KeyLockArgs::GetLockKey(key);
 
   auto lock = lt.Find(s);
+  if (lock) {
+    return lock->Check(mode);
+  }
+  return true;
+}
+
+bool DbSlice::CheckLock(IntentLock::Mode mode, DbIndex dbid, uint64_t fp) const {
+  const auto& lt = db_arr_[dbid]->trans_locks;
+  auto lock = lt.Find(fp);
   if (lock) {
     return lock->Check(mode);
   }

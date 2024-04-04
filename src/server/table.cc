@@ -77,6 +77,12 @@ std::optional<const IntentLock> LockTable::Find(string_view key) const {
   return std::nullopt;
 }
 
+std::optional<const IntentLock> LockTable::Find(uint64_t fp) const {
+  if (auto it = locks_.find(fp); it != locks_.end())
+    return it->second;
+  return std::nullopt;
+}
+
 bool LockTable::Acquire(string_view key, IntentLock::Mode mode) {
   DCHECK_EQ(KeyLockArgs::GetLockKey(key), key);
   uint64_t fp = Fingerprint(key);
@@ -90,6 +96,19 @@ void LockTable::Release(string_view key, IntentLock::Mode mode) {
   uint64_t fp = Fingerprint(key);
   auto it = locks_.find(fp);
   CHECK(it != locks_.end()) << key;
+
+  it->second.Release(mode);
+  if (it->second.IsFree())
+    locks_.erase(it);
+}
+
+bool LockTable::Acquire(uint64_t fp, IntentLock::Mode mode) {
+  return locks_[fp].Acquire(mode);
+}
+
+void LockTable::Release(uint64_t fp, IntentLock::Mode mode) {
+  auto it = locks_.find(fp);
+  CHECK(it != locks_.end()) << fp;
 
   it->second.Release(mode);
   if (it->second.IsFree())

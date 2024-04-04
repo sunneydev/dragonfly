@@ -255,6 +255,7 @@ class Transaction {
   // Returns locking arguments needed for DbSlice to Acquire/Release transactional locks.
   // Runs in the shard thread.
   KeyLockArgs GetLockArgs(ShardId sid) const;
+  KeyLockArgs2 GetLockArgs2(ShardId sid) const;
 
   // If the transaction is armed, disarm it and return the local mask (ACTIVE is always set).
   // Otherwise 0 is returned. Sync point (acquire).
@@ -447,6 +448,7 @@ class Transaction {
   struct PerShardCache {
     std::vector<std::string_view> args;
     std::vector<uint32_t> original_index;
+    unsigned key_step = 1;
 
     void Clear() {
       args.clear();
@@ -498,7 +500,7 @@ class Transaction {
   // Multi transactions unlock asynchronously, so they need to keep a copy of all they keys.
   // "Launder" keys by filtering uniques and replacing pointers with same lifetime as transaction.
   void LaunderKeyStorage(CmdArgVec* keys);
-  bool CheckLock(EngineShard* shard, IntentLock::Mode mode, const KeyLockArgs& lock_args);
+  bool CheckLock(EngineShard* shard, IntentLock::Mode mode, const KeyLockArgs2& lock_args);
 
   // Generic schedule used from Schedule() and ScheduleSingleHop() on slow path.
   void ScheduleInternal();
@@ -597,6 +599,7 @@ class Transaction {
   // We need values as well since we reorder keys, and we need to know what value corresponds
   // to what key.
   absl::InlinedVector<std::string_view, 4> kv_args_;
+  absl::InlinedVector<uint64_t, 4> kv_fp_;
 
   // Stores the full undivided command.
   CmdArgList full_args_;

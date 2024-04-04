@@ -292,11 +292,14 @@ class DbSlice {
   void OnCbFinish();
 
   bool Acquire(IntentLock::Mode m, const KeyLockArgs& lock_args);
-
   void Release(IntentLock::Mode m, const KeyLockArgs& lock_args);
+
+  bool Acquire(IntentLock::Mode m, const KeyLockArgs2& lock_args);
+  void Release(IntentLock::Mode m, const KeyLockArgs2& lock_args);
 
   // Returns true if the key can be locked under m. Does not lock.
   bool CheckLock(IntentLock::Mode m, DbIndex dbid, std::string_view key) const;
+  bool CheckLock(IntentLock::Mode m, DbIndex dbid, uint64_t fp) const;
 
   size_t db_array_size() const {
     return db_arr_.size();
@@ -478,6 +481,7 @@ class DbSlice {
 
   // Used in temporary computations in Acquire/Release.
   mutable absl::flat_hash_set<std::string_view> uniq_keys_;
+  mutable absl::flat_hash_set<uint64_t> uniq_keys2_;
 
   // ordered from the smallest to largest version.
   std::vector<std::pair<uint64_t, ChangeCallback>> change_cb_;

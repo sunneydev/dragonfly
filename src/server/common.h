@@ -64,6 +64,12 @@ struct KeyLockArgs {
   unsigned key_step = 1;
 };
 
+struct KeyLockArgs2 {
+  DbIndex db_index = 0;
+  absl::Span<const uint64_t> fps;
+  unsigned key_step = 1;
+};
+
 // Describes key indices.
 struct KeyIndex {
   unsigned start;

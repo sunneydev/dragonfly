@@ -33,6 +33,7 @@ using PrimeIterator = PrimeTable::iterator;
 using PrimeConstIterator = PrimeTable::const_iterator;
 using ExpireIterator = ExpireTable::iterator;
 using ExpireConstIterator = ExpireTable::const_iterator;
+using KeyFp = uint64_t;
 
 inline bool IsValid(PrimeIterator it) {
   return !it.is_done();
@@ -86,11 +87,14 @@ class LockTable {
  public:
   size_t Size() const;
   std::optional<const IntentLock> Find(std::string_view key) const;
+  std::optional<const IntentLock> Find(KeyFp fp) const;
 
   bool Acquire(std::string_view key, IntentLock::Mode mode);
   void Release(std::string_view key, IntentLock::Mode mode);
+  bool Acquire(KeyFp fp, IntentLock::Mode mode);
+  void Release(KeyFp fp, IntentLock::Mode mode);
 
-  static uint64_t Fingerprint(std::string_view key);
+  static KeyFp Fingerprint(std::string_view key);
 
   auto begin() const {
     return locks_.cbegin();
